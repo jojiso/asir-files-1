@@ -6,16 +6,16 @@ if [ $# -ne 1 ]; then
 fi
 
 # VARS
-DMZ_NET="172.20.100.0/24"
-LAN_NET="192.168.100.0/24"
+DMZ_NET="172.20.105.0/24"
+LAN_NET="192.168.105.0/24"
 
 DMZ_IF="ens3"
 WAN_IF="ens9"
 LAN_IF="ens10"
 
-DMZ_IP="172.20.100.254"
-WAN_IP="10.3.4.153"
-LAN_IP="192.168.100.254"
+DMZ_IP="172.20.105.254"
+WAN_IP="10.3.4.79"
+LAN_IP="192.168.105.254"
 
 CFG_FILE="/etc/default/fw-rules"
 
@@ -30,10 +30,10 @@ case $1 in
 
 	# Remove rules
 	$0 stop
-	
+
 	#enable routing
 	echo "1" > /proc/sys/net/ipv4/ip_forward
-	
+
 	# Default policies
 	iptables -P INPUT DROP
 	iptables -P OUTPUT DROP
@@ -61,6 +61,8 @@ case $1 in
 
 	# Cliente DNS
 	iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+	iptables -A OUTPUT -p tdp --dport 53 -j ACCEPT
+
 	iptables -A INPUT -p udp --sport 53  -m state --state ESTABLISHED,RELATED -j ACCEPT
 #>	iptables -A INPUT -p udp --sport 53 -j ACCEPT
 
@@ -73,7 +75,7 @@ case $1 in
 	iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
 	iptables -A INPUT -p tcp --sport 443  -m state --state ESTABLISHED,RELATED -j ACCEPT
 #>	iptables -A INPUT -i $WAN_IF -p tcp --sport 443 -j ACCEPT
-	
+
 	# Cliente SSH
 	iptables -A OUTPUT -p tcp --dport 22 -j ACCEPT
 	iptables -A INPUT -p tcp --sport 22  -m state --state ESTABLISHED,RELATED -j ACCEPT
@@ -81,18 +83,35 @@ case $1 in
 #>	iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 # Firewall como router
+	#Clientes DNS desde la DMZ a la WAN
+	iptables -A FORWARD -i $DMZ_IF -s $DMZ_NET -o $WAN_IF -p udp --dport 53 -j ACCEPT
+	iptables -t nat -A POSTROUTING -s $DMZ_NET -o $WAN_IF -p udp --dport 53 -j SNAT --to $WAN_IP
+
+	#Cliente DNS desde la WAN
+	#PETICIONES DE TRANSFERENCIAS DE ZONA
+	iptables -A FORWARD -i $WAN_IF -o $DMZ_IF -p tcp --dport 53 -j ACCEPT
+        iptables -t nat -A PREROUTING -i $WAN_IF -p tcp --dport 53 -j DNAT --to 172.20.105.22
+	#CONSULTAS DNS
+	iptables -A FORWARD -i $WAN_IF -o $DMZ_IF -p udp --dport 53 -j ACCEPT
+        iptables -t nat -A PREROUTING -i $WAN_IF -p udp --dport 53 -j DNAT --to 172.20.105.22
+
 	# Salida a Repositorios de Servidores de la DMZ (7)
 	iptables -A FORWARD -i $DMZ_IF -s $DMZ_NET -o $WAN_IF -p tcp --dport 80 -j ACCEPT
 #	iptables -A FORWARD -o $DMZ_IF -d $DMZ_NET -i $WAN_IF -p tcp --sport 80 -j ACCEPT
 	iptables -t nat -A POSTROUTING -s $DMZ_NET -o $WAN_IF -p tcp --dport 80 -j SNAT --to $WAN_IP
+
+	# Salida a Repositorios https (github) desde la DMZ (7)
+	iptables -A FORWARD -i $DMZ_IF -s $DMZ_NET -o $WAN_IF -p tcp --dport 443 -j ACCEPT
+#	iptables -A FORWARD -o $DMZ_IF -d $DMZ_NET -i $WAN_IF -p tcp --sport 80 -j ACCEPT
+	iptables -t nat -A POSTROUTING -s $DMZ_NET -o $WAN_IF -p tcp --dport 443 -j SNAT --to $WAN_IP
 
 	# SSH desde LAN a los servidores DMZ (8)
 	iptables -A FORWARD -i $LAN_IF -s $LAN_NET -o $DMZ_IF -d $DMZ_NET -p tcp --dport 22 -j ACCEPT
 #	iptables -A FORWARD -o $LAN_IF -d $LAN_NET -i $DMZ_IF -s $DMZ_NET -p tcp --sport 22 -j ACCEPT
 
 	# cliente DNS desde LAN a servidor DNS en la DMZ
-	iptables -A FORWARD -i $LAN_IF -s $LAN_NET -o $DMZ_IF -d $DMZ_NET -p tcp --dport 53 -j ACCEPT
-#	iptables -A FORWARD -o $LAN_IF -d $LAN_NET -i $DMZ_IF -s $DMZ_NET -p tcp --sport 53 -j ACCEPT
+	iptables -A FORWARD -i $LAN_IF -s $LAN_NET -o $DMZ_IF -d $DMZ_NET -p udp --dport 53 -j ACCEPT
+#	iptables -A FORWARD -o $LAN_IF -d $LAN_NET -i $DMZ_IF -s $DMZ_NET -p udp --sport 53 -j ACCEPT
 
 	# HTTP desde LAN a servidor DMZ
 	iptables -A FORWARD -i $LAN_IF -s $LAN_NET -o $DMZ_IF -d $DMZ_NET -p tcp --dport 80 -j ACCEPT
@@ -115,6 +134,8 @@ case $1 in
 #	iptables -A FORWARD -i $LAN_IF -s $LAN_NET -o $DMZ_IF -d $DMZ_NET -p icmp -j ACCEPT
 #	iptables -A FORWARD -i $DMZ_IF -s $DMZ_NET -o $LAN_IF -d $LAN_IF -p icmp -j ACCEPT
 	iptables -A FORWARD -p icmp -j ACCEPT
+	iptables -t nat -A POSTROUTING -o $WAN_IF -p icmp  -j SNAT --to $WAN_IP
+
 
 	# Se permiten el FORWARD de todas las respuestas a peticiones hechas
  	iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
